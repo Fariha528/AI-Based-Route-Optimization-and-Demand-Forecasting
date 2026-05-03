@@ -1,0 +1,7 @@
+Flask
+Flask-CORS
+requests
+lightgbm
+pandas
+numpy
+scikit-learn

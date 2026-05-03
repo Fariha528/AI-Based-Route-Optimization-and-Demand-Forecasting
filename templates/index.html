@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Taxi Intelligence Platform</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- LeafletJS for Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Geocoder Plugin for Address Search -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    
+    <style>
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        #map-optimize, #map-forecast { height: 450px; border-radius: 0.5rem; }
+        .leaflet-container { z-index: 10; }
+        .leaflet-control-geocoder-form input { padding: 0.5rem; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Taxi Intelligence Platform</h1>
+            <p class="text-lg text-gray-600">Route Optimization & Demand Forecasting</p>
+        </header>
+
+        <!-- Tabs -->
+        <div class="mb-6 border-b border-gray-300" id="tabs">
+            <button class="py-2 px-4 text-lg font-medium text-gray-500 tab-active" data-tab="optimize">Route Optimizer</button>
+            <button class="py-2 px-4 text-lg font-medium text-gray-500" data-tab="forecast">Demand Forecast</button>
+        </div>
+
+        <!-- Tab Content -->
+        <main>
+            <!-- Route Optimizer Tab -->
+            <div id="tab-optimize" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Left Panel: Controls -->
+                <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
+                    <h2 class="text-2xl font-semibold mb-4">Route Planner</h2>
+                    <p class="text-gray-600 mb-4">Click on the map to add up to 10 waypoints. Start and end points will be added first.</p>
+                    
+                    <button id="optimize-btn" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300 mb-3">
+                        Optimize Route
+                    </button>
+                    <button id="clear-btn" class="w-full bg-gray-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-gray-700 transition duration-300">
+                        Clear Waypoints
+                    </button>
+
+                    <div id="waypoints-list" class="mt-4 space-y-2">
+                        <!-- Waypoints will be listed here by JS -->
+                    </div>
+
+                    <div id="route-summary" class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg hidden">
+                        <h3 class="text-lg font-semibold text-blue-800">Route Optimized!</h3>
+                        <p class="text-blue-700">Estimated Duration: <span id="route-duration" class="font-bold"></span></p>
+                    </div>
+                </div>
+                <!-- Right Panel: Map -->
+                <div class="lg:col-span-2 bg-white p-4 rounded-lg shadow-md">
+                    <div id="map-optimize"></div>
+                </div>
+            </div>
+
+            <!-- Demand Forecast Tab -->
+            <div id="tab-forecast" class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Left Panel: Controls -->
+                <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
+                    <h2 class="text-2xl font-semibold mb-4">Demand Forecast</h2>
+                    <p class="text-gray-600 mb-4">Click on the map to select a location, then choose a time to get a demand prediction.</p>
+                    
+                    <div class="mb-4">
+                        <label for="forecast-datetime" class="block text-sm font-medium text-gray-700 mb-1">Select Time</label>
+                        <input type="datetime-local" id="forecast-datetime" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+
+                    <button id="forecast-btn" class="w-full bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700 transition duration-300">
+                        Forecast Demand
+                    </button>
+
+                    <!-- 
+                      CHANGE 1: This div is now a placeholder. 
+                      JavaScript will add all the color classes. 
+                    -->
+                    <div id="forecast-result" class="mt-6 p-4 rounded-lg border hidden">
+                        <h3 id="forecast-title" class="text-lg font-semibold">Forecast Result</h3>
+                        <p>Selected Location: <span id="forecast-location" class="font-bold"></span></p>
+                        <p>Predicted Demand: <span id="forecast-demand" class="font-bold"></span></p>
+                        <!-- ADDED THIS NEW LINE for the demand level -->
+                        <p>Demand Level: <span id="forecast-level" class="font-bold"></span></p>
+                    </div>
+                </div>
+                <!-- Right Panel: Map -->
+                <div class="lg:col-span-2 bg-white p-4 rounded-lg shadow-md">
+                    <div id="map-forecast"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- Constants and State ---
+        // We use relative URLs, but you can change this if your API is elsewhere
+        const API_BASE_URL = "http://127.0.0.1:5000/api"; 
+        const NYC_COORDS = [40.7128, -74.0060];
+        let mapOptimize, mapForecast;
+        let waypoints = []; // [{lat, lng, name, marker}]
+        let routeLayer = null; // To store the optimized route line
+        let forecastMarker = null; // To store the forecast location marker
+
+        // --- Map Initialization ---
+        function initOptimizeMap() {
+            mapOptimize = L.map('map-optimize').setView(NYC_COORDS, 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(mapOptimize);
+
+            // Geocoder search
+            L.Control.geocoder({
+                defaultMarkGeocode: false,
+                placeholder: 'Search for a location...'
+            }).on('markgeocode', function(e) {
+                const { center, name } = e.geocode;
+                addWaypoint(center.lat, center.lng, name);
+                mapOptimize.setView(center, 14);
+            }).addTo(mapOptimize);
+
+            mapOptimize.on('click', function(e) {
+                const { lat, lng } = e.latlng;
+                addWaypoint(lat, lng, `(${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+            });
+        }
+
+        function initForecastMap() {
+            mapForecast = L.map('map-forecast').setView(NYC_COORDS, 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(mapForecast);
+
+            // Geocoder search
+            L.Control.geocoder({
+                defaultMarkGeocode: false,
+                placeholder: 'Search for a location...'
+            }).on('markgeocode', function(e) {
+                const { center, name } = e.geocode;
+                setForecastLocation(center.lat, center.lng, name);
+                mapForecast.setView(center, 14);
+            }).addTo(mapForecast);
+
+            mapForecast.on('click', function(e) {
+                const { lat, lng } = e.latlng;
+                setForecastLocation(lat, lng, `(${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+            });
+        }
+
+        // --- Tab Switching Logic ---
+        function switchTab(tabId) {
+            document.querySelectorAll('#tabs button').forEach(button => {
+                if (button.dataset.tab === tabId) {
+                    button.classList.add('tab-active');
+                    button.classList.remove('text-gray-500');
+                } else {
+                    button.classList.remove('tab-active');
+                    button.classList.add('text-gray-500');
+                }
+            });
+
+            document.querySelectorAll('main > div').forEach(tabContent => {
+                if (tabContent.id === `tab-${tabId}`) {
+                    tabContent.classList.remove('hidden');
+                } else {
+                    tabContent.classList.add('hidden');
+                }
+            });
+
+            // Ensure maps are rendered correctly
+            if (tabId === 'optimize' && mapOptimize) mapOptimize.invalidateSize();
+            if (tabId === 'forecast' && mapForecast) mapForecast.invalidateSize();
+        }
+
+        // --- Route Optimization Logic ---
+        function addWaypoint(lat, lng, name) {
+            if (waypoints.length >= 10) {
+                alert("Maximum of 10 waypoints allowed.");
+                return;
+            }
+
+            const marker = L.marker([lat, lng]).addTo(mapOptimize)
+                .bindPopup(`<b>Waypoint ${waypoints.length + 1}</b><br>${name}`)
+                .openPopup();
+
+            waypoints.push({ lat, lng, name, marker });
+            updateWaypointsList();
+        }
+
+        function updateWaypointsList() {
+            const listEl = document.getElementById('waypoints-list');
+            listEl.innerHTML = '';
+            if (waypoints.length === 0) {
+                listEl.innerHTML = '<p class="text-gray-500 italic">No waypoints added.</p>';
+                return;
+            }
+
+            waypoints.forEach((wp, index) => {
+                let label = "Waypoint";
+                if (index === 0) label = "Start Point";
+                else if (index === waypoints.length - 1) label = "End Point";
+
+                const el = document.createElement('div');
+                el.className = 'p-2 bg-gray-50 rounded border border-gray-200';
+                el.innerHTML = `<span class="font-semibold">${label} ${index + 1}:</span> ${wp.name}`;
+                listEl.appendChild(el);
+            });
+        }
+            <!-- ... (The optimizeRoute and clearWaypoints functions are unchanged) ... -->
+        async function optimizeRoute() {
+            if (waypoints.length < 2) {
+                alert("Please add at least two waypoints (start and end).");
+                return;
+            }
+
+            // Show loading state
+            const btn = document.getElementById('optimize-btn');
+            btn.disabled = true;
+            btn.textContent = 'Optimizing...';
+            if(routeLayer) routeLayer.remove();
+
+            const locations = waypoints.map(wp => ({ lat: wp.lat, lng: wp.lng, name: wp.name }));
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/optimize-route`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ locations })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                // Draw the optimized route
+                const routeCoords = result.route_geometry;
+                routeLayer = L.polyline(routeCoords, { color: 'blue', weight: 5 }).addTo(mapOptimize);
+                mapOptimize.fitBounds(routeLayer.getBounds());
+
+                // Reorder markers and popups
+                const optimizedRoute = result.optimized_route; // [{lat, lng, name}]
+                
+                // Remove old markers
+                waypoints.forEach(wp => wp.marker.remove());
+                waypoints = []; // Clear old state
+                
+                // Add new, ordered markers
+                optimizedRoute.forEach((wp, index) => {
+                    let label = "Waypoint";
+                    if (index === 0) label = "Start";
+                    else if (index === optimizedRoute.length - 1) label = "End";
+                    
+                    const marker = L.marker([wp.lat, wp.lng]).addTo(mapOptimize)
+                        .bindPopup(`<b>${index + 1}. ${label}</b><br>${wp.name}`)
+                        .openPopup();
+                    
+                    waypoints.push({ lat: wp.lat, lng: wp.lng, name: wp.name, marker });
+                });
+
+                updateWaypointsList(); // Update list with new order
+                
+                // Show summary
+                document.getElementById('route-duration').textContent = `${result.duration_minutes.toFixed(1)} minutes`;
+                document.getElementById('route-summary').classList.remove('hidden');
+
+            } catch (error) { 
+                console.error("Optimization error:", error);
+                alert("Failed to optimize route. Please check the console and backend server.");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Optimize Route';
+            }
+        }
+
+        function clearWaypoints() {
+            waypoints.forEach(wp => wp.marker.remove());
+            waypoints = [];
+            if (routeLayer) routeLayer.remove();
+            routeLayer = null;
+            document.getElementById('route-summary').classList.add('hidden');
+            updateWaypointsList();
+        }
+
+        // --- Demand Forecast Logic ---
+        function setForecastLocation(lat, lng, name) {
+            if (forecastMarker) {
+                forecastMarker.remove();
+            }
+            forecastMarker = L.marker([lat, lng]).addTo(mapForecast)
+                .bindPopup(`<b>Selected Location</b><br>${name}`)
+                .openPopup();
+            
+            // Store data on the marker
+            forecastMarker.data = { lat, lng, name };
+            
+            document.getElementById('forecast-location').textContent = name;
+        }
+
+        async function forecastDemand() {
+            if (!forecastMarker) {
+                alert("Please select a location on the map.");
+                return;
+            }
+            const datetime = document.getElementById('forecast-datetime').value;
+            if (!datetime) {
+                alert("Please select a date and time.");
+                return;
+            }
+
+            const { lat, lng } = forecastMarker.data;
+
+            const btn = document.getElementById('forecast-btn');
+            btn.disabled = true;
+            btn.textContent = 'Forecasting...';
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/demand-forecast`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat, lng, datetime })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                
+                // --- CHANGE 2: Added logic for demand level and color-coding ---
+                const demand = result.demand_score;
+                
+                let level = "Low";
+                let levelColorClass = "text-green-700"; // Tailwind class for Low
+                let bgClass = "bg-green-50";
+                let borderClass = "border-green-200";
+                let textClass = "text-green-700";
+                let titleClass = "text-green-800";
+
+                // We can set thresholds based on your model's performance.
+                // Since MedAE was ~1.5 and MAE was ~7, 50 is a good "Moderate" threshold.
+                // We'll set "High" at 100, but you can adjust these numbers.
+                
+                if (demand > 50) { // Moderate
+                    level = "Moderate";
+                    levelColorClass = "text-yellow-700"; 
+                    bgClass = "bg-yellow-50";
+                    borderClass = "border-yellow-200";
+                    textClass = "text-yellow-700";
+                    titleClass = "text-yellow-800";
+                }
+                if (demand > 100) { // High
+                    level = "High";
+                    levelColorClass = "text-red-700";
+                    bgClass = "bg-red-50";
+                    borderClass = "border-red-200";
+                    textClass = "text-red-700";
+                    titleClass = "text-red-800";
+                }
+
+                // Update the text content
+                document.getElementById('forecast-demand').textContent = `${demand} rides`;
+                
+                const levelEl = document.getElementById('forecast-level');
+                levelEl.textContent = level;
+                levelEl.className = `font-bold ${levelColorClass}`; // Set color on the level text
+
+                // Update the result box to match the color
+                const resultBox = document.getElementById('forecast-result');
+                // We reset all classes to apply the new colors
+                resultBox.className = `mt-6 p-4 rounded-lg border ${bgClass} ${borderClass}`;
+                
+                // Update all text/title elements inside the box to match
+                resultBox.querySelector('h3').className = `text-lg font-semibold ${titleClass}`;
+                resultBox.querySelectorAll('p').forEach(p => {
+                    p.className = textClass;
+                    // Re-apply font-bold to children spans
+                    p.querySelectorAll('span').forEach(span => span.classList.add('font-bold'));
+                });
+
+                resultBox.classList.remove('hidden');
+                // --- END OF CHANGES ---
+
+            } catch (error) {
+                console.error("Forecast error:", error);
+                alert("Failed to get forecast. Please check the console and backend server.\nError: " + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Forecast Demand';
+            }
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('DOMContentLoaded', () => {
+            initOptimizeMap();
+            initForecastMap();
+            document.querySelectorAll('#tabs button').forEach(button => {
+                button.addEventListener('click', () => switchTab(button.dataset.tab));
+            });
+            document.getElementById('optimize-btn').addEventListener('click', optimizeRoute);
+            document.getElementById('clear-btn').addEventListener('click', clearWaypoints);
+            document.getElementById('forecast-btn').addEventListener('click', forecastDemand);
+        });
+
+    </script>
+</body>
+</html>
+
