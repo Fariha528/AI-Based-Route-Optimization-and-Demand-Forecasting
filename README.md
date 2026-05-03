@@ -1,6 +1,4 @@
-# AI-Based-Route-Optimization-and-Demand-Forecasting
-
-# 🚚 Route Optimization & Demand Forecasting
+# AI-Based-Route Optimization & Demand Forecasting
 
 A machine learning-based system that predicts hourly demand and helps optimize routing decisions for efficient resource allocation.
 
